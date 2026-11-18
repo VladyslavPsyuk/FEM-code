@@ -1,0 +1,88 @@
+// Parameters
+int nn = 8;
+real l = 3.0;          // Base reference length
+real h = 2.6;          // Working height
+real cLen = 4.2;       // Canopy cantilever length
+
+real Mu = 1.;
+real Lambda = 1.;
+
+real Fx = 0.;
+real Fy = -1.e-3;      // Gravity body force
+
+// Canopy Profile Coordinates (shifted so front tip is at x = 0)
+real cRearX = l * 0.62;
+real cFrontX = cRearX - cLen;
+real cJointX = cRearX - cLen * 0.40;
+real x0 = cFrontX;
+
+real[int] cx = [
+    cFrontX - x0,
+    cRearX - x0,
+    cRearX - x0,
+    cRearX - cLen*0.18 - x0,
+    cJointX - x0,
+    cFrontX - x0
+];
+real[int] cy = [h, h, h*0.78, h*0.74, h*0.85, h*0.96];
+
+// Mesh Borders (Label 3 = Top roof, Label 4 = Rear hinge, Label 5 = Hydraulic leg support)
+border c0(t=0, 1){ x = cx[0] + t*(cx[1]-cx[0]); y = cy[0] + t*(cy[1]-cy[0]); label = 3; } // Top surface
+border c1(t=0, 1){ x = cx[1] + t*(cx[2]-cx[1]); y = cy[1] + t*(cy[2]-cy[1]); label = 4; } // Rear hinge
+border c2(t=0, 1){ x = cx[2] + t*(cx[3]-cx[2]); y = cy[2] + t*(cy[3]-cy[2]); label = 1; } // Rear step
+border c3(t=0, 1){ x = cx[3] + t*(cx[4]-cx[3]); y = cy[3] + t*(cy[4]-cy[3]); label = 1; } // Mid underside
+border c4(t=0, 1){ x = cx[4] + t*(cx[5]-cx[4]); y = cy[4] + t*(cy[5]-cy[4]); label = 5; } // Leg support zone
+border c5(t=0, 1){ x = cx[5] + t*(cx[0]-cx[5]); y = cy[5] + t*(cy[0]-cy[5]); label = 2; } // Front tip
+
+// Build Mesh
+mesh Th = buildmesh(
+      c0(-5*nn) + c1(-nn) + c2(-nn)
+    + c3(-2*nn) + c4(-3*nn) + c5(-nn)
+);
+
+// Non-homogeneous multi-point roof loading along top surface (label = 3)
+real L = cx[1];
+real qMax = 1.5e-3;
+func qTop = -qMax * (
+      0.6 * exp(-((x - 0.15*L)/0.35)^2)
+    + 1.0 * exp(-((x - 0.50*L)/0.40)^2)
+    + 0.7 * exp(-((x - 0.85*L)/0.35)^2)
+);
+
+// Fespace
+fespace Uh(Th, P1);
+Uh Ux, Uy;
+Uh Uhx, Uhy;
+
+// Macros
+real sqrt2 = sqrt(2.);
+macro Epsilon(U) [dx(U#x), dy(U#y), div(U#y, U#x)/sqrt2] //
+macro div(ux, uy) (dx(ux) + dy(uy)) //
+macro Div(U) div(U#x, U#y) //
+
+// Elasticity Problem
+problem Lame ([Ux, Uy], [Uhx, Uhy])
+    = int2d(Th)(
+          Lambda * Div(U) * Div(Uh)
+        + 2.*Mu * Epsilon(U)' * Epsilon(Uh)
+    )
+    - int2d(Th)(
+          [Fx, Fy]' * [Uhx, Uhy]
+    )
+    - int1d(Th, 3)(
+          qTop * Uhy
+    )
+    + on(4, Ux=0, Uy=0)
+    + on(5, Uy=0)
+    ;
+
+// Solve
+Lame;
+
+// Move mesh with clean 1:1 visual scale
+real mag = 1.0;
+Th = movemesh(Th, [x + mag*Ux, y + mag*Uy]);
+Ux = Ux; Uy = Uy;
+
+// Plot displacement vectors
+plot([Ux, Uy], value=true, cmm="Canopy Elastic Displacement [Ux, Uy]");
