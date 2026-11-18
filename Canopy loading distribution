@@ -1,0 +1,56 @@
+//https://freefem.org/tryit#
+//canopy loading distribution
+
+// 1. Parameters
+real L = 4.2;          // Canopy length (m)
+real H = 0.45;         // Canopy thickness (m)
+int nn = 12;           // Mesh resolution
+
+// Material properties (Structural Steel)
+real E = 210e9;        // Young's modulus (Pa)
+real nu = 0.3;         // Poisson's ratio
+real mu = E / (2.0 * (1.0 + nu));
+real lambda = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+
+// 2. Mesh (Top surface is label=3, Rear hinge is label=4, Bottom is label=1)
+mesh Th = square(L*nn, H*nn, [L*x, H*y]);
+
+// 3. Finite Element Space (2D Vector Displacements [ux, uy])
+fespace Vh(Th, [P2, P2]);
+Vh [ux, uy], [vx, vy];
+
+// 4. Non-Homogeneous Surface Load Distribution q(x) on Top Canopy (Pa)
+// Models higher rock pressure near the coal face (x=0) + sinusoidal bump
+real qMax = 1.2e6;     // Peak downward roof pressure (1.2 MPa)
+func qLoad = -qMax * (0.4 + 0.6 * exp(-0.8 * x) + 0.25 * sin(pi * x / L));
+
+// 5. Macros for Strain and Stress Tensors
+real sqrt2 = sqrt(2.0);
+macro epsilon(u1, u2) [dx(u1), dy(u2), (dy(u1) + dx(u2)) / sqrt2] //
+macro div(u1, u2) (dx(u1) + dy(u2)) //
+
+// 6. Linear Elasticity Weak Form
+solve CanopyElasticity([ux, uy], [vx, vy])
+    = int2d(Th)(
+          lambda * div(ux, uy) * div(vx, vy)
+        + 2.0 * mu * (epsilon(ux, uy)' * epsilon(vx, vy))
+    )
+    - int1d(Th, 3)(
+          qLoad * vy    // Non-homogeneous vertical traction on top surface (label=3)
+    )
+    + on(4, ux=0, uy=0) // Clamped/pinned at rear caving shield joint (x=L)
+    + on(1, uy=0)       // Vertical support along bottom leg contact (y=0)
+    ;
+
+// 7. Compute Von Mises Stress for Visualization
+fespace Sh(Th, P1);
+Sh sxx = lambda * div(ux, uy) + 2.0 * mu * dx(ux);
+Sh syy = lambda * div(ux, uy) + 2.0 * mu * dy(uy);
+Sh sxy = mu * (dy(ux) + dx(uy));
+Sh vonMises = sqrt(sxx^2 - sxx*syy + syy^2 + 3.0*sxy^2);
+
+// 8. Deform Mesh & Plot Results
+real mag = 50.0; // Displacement magnification factor for display
+mesh ThDef = movemesh(Th, [x + mag*ux, y + mag*uy]);
+
+plot(ThDef, vonMises, fill=true, value=true, cmm="Canopy Von Mises Stress (Pa) & Deformed Shape");
